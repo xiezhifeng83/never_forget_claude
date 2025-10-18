@@ -1,0 +1,509 @@
+openapi: 3.0.3
+info:
+  title: Never Forget Claude - Todo List API
+  description: |
+    REST API for cross-platform todo list synchronization.
+
+    **Authentication**: All endpoints require a device token in the Authorization header.
+
+    **Conflict Resolution**: Last-write-wins based on `updatedAt` timestamp.
+  version: 1.0.0
+  contact:
+    name: API Support
+servers:
+  - url: https://api.neverforget.example.com/v1
+    description: Production server
+  - url: http://localhost:8000/v1
+    description: Local development server
+
+security:
+  - DeviceToken: []
+
+paths:
+  /tasks:
+    get:
+      summary: Get all tasks for the authenticated device
+      description: Returns all tasks belonging to the device token, ordered by position.
+      operationId: listTasks
+      parameters:
+        - name: since
+          in: query
+          description: Only return tasks modified after this timestamp (ISO 8601)
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-10-17T10:00:00Z"
+      responses:
+        '200':
+          description: Successfully retrieved tasks
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Task'
+                  serverTime:
+                    type: string
+                    format: date-time
+                    description: Current server timestamp for client sync tracking
+                    example: "2025-10-17T10:30:05Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+    post:
+      summary: Create a new task
+      description: Creates a new task with client-generated UUID
+      operationId: createTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskCreate'
+      responses:
+        '201':
+          description: Task created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Task ID already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /tasks/{taskId}:
+    get:
+      summary: Get a specific task by ID
+      operationId: getTask
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: Task found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+    put:
+      summary: Update an existing task
+      description: |
+        Updates task text and/or position. Uses last-write-wins conflict resolution.
+        If server's updatedAt is newer than request's updatedAt, returns 409 Conflict.
+      operationId: updateTask
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskUpdate'
+      responses:
+        '200':
+          description: Task updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Conflict - server has newer version
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Conflict: server version is newer"
+                  serverVersion:
+                    $ref: '#/components/schemas/Task'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+    delete:
+      summary: Delete a task
+      operationId: deleteTask
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '204':
+          description: Task deleted successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /tasks/sync:
+    post:
+      summary: Full synchronization endpoint
+      description: |
+        Batch endpoint for syncing pending changes and fetching updates.
+        Clients send all pending changes (creates, updates, deletes) and receive
+        the current server state plus any conflicts.
+      operationId: syncTasks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncRequest'
+      responses:
+        '200':
+          description: Sync completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /health:
+    get:
+      summary: Health check endpoint
+      description: Returns API health status (no authentication required)
+      operationId: healthCheck
+      security: []
+      responses:
+        '200':
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "ok"
+                  timestamp:
+                    type: string
+                    format: date-time
+                    example: "2025-10-17T10:30:05Z"
+
+components:
+  securitySchemes:
+    DeviceToken:
+      type: http
+      scheme: bearer
+      bearerFormat: UUID
+      description: Device-specific UUID v4 token generated on first launch
+
+  parameters:
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      description: UUID of the task
+      schema:
+        type: string
+        format: uuid
+        example: "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d"
+
+  schemas:
+    Task:
+      type: object
+      required:
+        - id
+        - deviceToken
+        - text
+        - position
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique task identifier (client-generated UUID v4)
+          example: "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d"
+        deviceToken:
+          type: string
+          format: uuid
+          description: Device token that owns this task
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        text:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Task description/content
+          example: "Buy groceries"
+        position:
+          type: integer
+          minimum: 0
+          description: Ordinal position (0 = top/highest priority)
+          example: 0
+        createdAt:
+          type: string
+          format: date-time
+          description: UTC timestamp when task was created
+          example: "2025-10-17T10:25:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          description: UTC timestamp of last modification
+          example: "2025-10-17T10:25:00Z"
+
+    TaskCreate:
+      type: object
+      required:
+        - id
+        - text
+        - position
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Client-generated UUID v4 for the task
+          example: "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d"
+        text:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Task description
+          example: "Buy groceries"
+        position:
+          type: integer
+          minimum: 0
+          description: Position in task list (0 = top)
+          example: 0
+
+    TaskUpdate:
+      type: object
+      required:
+        - updatedAt
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: New task text (optional if only updating position)
+          example: "Buy groceries and cook dinner"
+        position:
+          type: integer
+          minimum: 0
+          description: New position (optional if only updating text)
+          example: 1
+        updatedAt:
+          type: string
+          format: date-time
+          description: Client's timestamp for conflict detection
+          example: "2025-10-17T10:28:00Z"
+
+    SyncRequest:
+      type: object
+      required:
+        - pendingChanges
+      properties:
+        lastSyncAt:
+          type: string
+          format: date-time
+          description: Last successful sync timestamp (for delta queries)
+          example: "2025-10-17T10:00:00Z"
+        pendingChanges:
+          type: array
+          description: List of pending creates, updates, and deletes
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/SyncCreateChange'
+              - $ref: '#/components/schemas/SyncUpdateChange'
+              - $ref: '#/components/schemas/SyncDeleteChange'
+            discriminator:
+              propertyName: action
+
+    SyncCreateChange:
+      type: object
+      required:
+        - action
+        - id
+        - text
+        - position
+        - createdAt
+        - updatedAt
+      properties:
+        action:
+          type: string
+          enum: [create]
+        id:
+          type: string
+          format: uuid
+        text:
+          type: string
+          maxLength: 500
+        position:
+          type: integer
+          minimum: 0
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    SyncUpdateChange:
+      type: object
+      required:
+        - action
+        - id
+        - updatedAt
+      properties:
+        action:
+          type: string
+          enum: [update]
+        id:
+          type: string
+          format: uuid
+        text:
+          type: string
+          maxLength: 500
+        position:
+          type: integer
+          minimum: 0
+        updatedAt:
+          type: string
+          format: date-time
+
+    SyncDeleteChange:
+      type: object
+      required:
+        - action
+        - id
+        - updatedAt
+      properties:
+        action:
+          type: string
+          enum: [delete]
+        id:
+          type: string
+          format: uuid
+        updatedAt:
+          type: string
+          format: date-time
+
+    SyncResponse:
+      type: object
+      required:
+        - serverTime
+        - tasks
+        - conflicts
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+          description: Current server time for client to track last sync
+          example: "2025-10-17T10:30:05Z"
+        tasks:
+          type: array
+          description: All tasks for this device token
+          items:
+            $ref: '#/components/schemas/Task'
+        conflicts:
+          type: array
+          description: List of conflicts where server version won
+          items:
+            $ref: '#/components/schemas/Conflict'
+
+    Conflict:
+      type: object
+      required:
+        - localId
+        - resolution
+        - serverVersion
+      properties:
+        localId:
+          type: string
+          format: uuid
+          description: ID of the task that conflicted
+          example: "b2c3d4e5-f6a7-5b6c-9d0e-1f2a3b4c5d6e"
+        resolution:
+          type: string
+          enum: [server_wins, deleted]
+          description: How the conflict was resolved
+          example: "server_wins"
+        serverVersion:
+          $ref: '#/components/schemas/Task'
+          description: The winning server version (null if deleted)
+
+    Error:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+          example: "Invalid request"
+        details:
+          type: object
+          description: Additional error details
+          additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Validation failed"
+            details:
+              text: "Task text cannot be empty"
+
+    Unauthorized:
+      description: Missing or invalid device token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Unauthorized: Invalid device token"
+
+    NotFound:
+      description: Task not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Task not found"
+
+    ServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Internal server error"

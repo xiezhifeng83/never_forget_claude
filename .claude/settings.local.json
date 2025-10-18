@@ -40,7 +40,15 @@
       "mcp__chrome-devtools__list_pages",
       "mcp__chrome-devtools__navigate_page",
       "mcp__chrome-devtools__new_page",
-      "mcp__chrome-devtools__performance_start_trace"
+      "mcp__chrome-devtools__performance_start_trace",
+      "Bash(dir /b /s \"D:\\GitHub\\claude-demo\\never_forget_claude\\.specify\\templates\\commands\")",
+      "Bash(git rev-parse:*)",
+      "Bash(dir:*)",
+      "Bash(cp:*)",
+      "Bash(uvicorn:*)",
+      "Bash(timeout 5 uvicorn:*)",
+      "Bash(netstat:*)",
+      "Bash(taskkill:*)"
     ],
     "deny": [],
     "ask": []
